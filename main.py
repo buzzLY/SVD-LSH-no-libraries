@@ -88,7 +88,8 @@ def generateHash(bandVector):
     out = 0
     for bit in bandVector:
         out = (out << 1) | bit
-    return int(out % (len(bandVector) * 122))
+    smoothing = 100
+    return int(out % (len(bandVector) * smoothing))
 
 # Apply LSH
 def applyLSH(pair):
@@ -106,14 +107,15 @@ def applyLSH(pair):
     return res.items()
 
 # Combine files which are same for at least one band and return list
-def combineSimilarFiles(files):
+def combineSimilarFiles(files, fileNames):
     similarFiles = {}
-    for file in outputFiles4:
+    for file in fileNames:
         if file in files:
 #            Remove file from files.
             x = list(files)
             x.remove(file)
             similarFiles[file] = x
+            print (similarFiles)
     return similarFiles.items()
 
 # Get SVD for image using V vector that we got from 10 samples
@@ -143,29 +145,24 @@ def runSvd(partition):
     return (V.T, m, std)
 
 if __name__ == "__main__":
+    
     config = SparkConf().setAppName("PCA Test")
     sc = SparkContext(conf=config)
-
-    directoryPath = "" # Prove directory path containing files
-
+    directoryPath = "./sample/*"  # Provide directory path
     outputTxtFile = open("output.txt","w")
     filesRdd = sc.binaryFiles(directoryPath)
-
+    filesRdd.persist()
 
 #    Calculate the feature vector for all images
     featureVectorRDD = filesRdd.flatMap(lambda file: getOrthoTif(file[0], file[1])).mapValues(lambda val: calFeatureVector(val))
 
     featureVectorRDD.persist()
+    fileNames = featureVectorRDD.keys().map(lambda x: x[x.rfind('/') + 1:]).collect()
 #    Apply LSH on featureVector
     lshRDD = featureVectorRDD.flatMap(lambda val: applyLSH(val)).groupByKey().mapValues(list)
 #    Apply filter to get similar files for 4 given images and combine them
-#    Find only those files which are similar to: "3677454_2025195.zip-1", "3677454_2025195.zip-18"
-    outputFiles  = ["3677454_2025195.zip-1", "3677454_2025195.zip-18"]
-    similarFilesRDD = lshRDD.filter(lambda val: any(x in val[1] for x in outputFiles)).flatMap(lambda x: combineSimilarFiles(x[1])).reduceByKey(lambda a, b: list(set(a + b))).collect()
-
-
+    similarFilesRDD = lshRDD.flatMap(lambda x: combineSimilarFiles(x[1], fileNames)).reduceByKey(lambda a, b: list(set(a + b))).collect()
     similarFilesRDDDict = dict(similarFilesRDD)
-    
     similarFilesList = list(similarFilesRDDDict.keys()) + list(set().union(*similarFilesRDDDict.values()))
 #   Taking random 10 samples and applying SVD on it to get V matrix which will be used to tranform all images.
     sample = featureVectorRDD.takeSample(False, 10)
@@ -175,7 +172,7 @@ if __name__ == "__main__":
     low_Dimension_Images = dict(low_Dimension_Images)
 
     outputTxtFile.write("\n\n\n************  Result  *****************\n\n")
-    for key,imageList in q3bRDDDict.items():
+    for key,imageList in similarFilesRDDDict.items():
         distance = dict()
         for img in imageList:
             a = low_Dimension_Images[key]
